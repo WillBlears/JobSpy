@@ -37,6 +37,7 @@ jobs = scrape_jobs(
     location="Dallas, TX",
     results_wanted=10,
     country_indeed='USA'  # only needed for indeed / glassdoor
+    # full_description=True (get full description for LinkedIn/Indeed; slower)
 )
 print(f"Found {len(jobs)} jobs")
 print(jobs.head())
@@ -69,7 +70,8 @@ Optional
 ├── is_remote (bool)
 ├── full_description (bool): fetches full description for Indeed / LinkedIn (much slower)
 ├── results_wanted (int): number of job results to retrieve for each site specified in 'site_type'
-├── easy_apply (bool): filters for jobs that are hosted on LinkedIn
+├── easy_apply (bool): filters for jobs that are hosted on the job board site
+├── linkedin_company_ids (list[int): searches for linkedin jobs with specific company ids
 ├── country_indeed (enum): filters the country on Indeed (see below for correct spelling)
 ├── offset (num): starts the search from an offset (e.g. 25 will start the search from the 25th result)
 ```
@@ -80,6 +82,7 @@ Optional
 JobPost
 ├── title (str)
 ├── company (str)
+├── company_url (str)
 ├── job_url (str)
 ├── location (object)
 │   ├── country (str)
@@ -158,16 +161,11 @@ persist, [submit an issue](https://github.com/Bunsly/JobSpy/issues).
 **Q: Received a response code 429?**  
 **A:** This indicates that you have been blocked by the job board site for sending too many requests. All of the job board sites are aggressive with blocking. We recommend:
 
-- Waiting a few seconds between requests.
+- Waiting some time between scrapes (site-dependent).
 - Trying a VPN or proxy to change your IP address.
 
 ---
 
-**Q: Experiencing a "Segmentation fault: 11" on macOS Catalina?**  
-**A:** This is due to `tls_client` dependency not supporting your architecture. Solutions and workarounds include:
-
-- Upgrade to a newer version of MacOS
-- Reach out to the maintainers of [tls_client](https://github.com/bogdanfinn/tls-client) for fixes
 
 
   

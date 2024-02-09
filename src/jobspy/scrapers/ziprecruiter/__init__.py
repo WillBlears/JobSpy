@@ -6,8 +6,7 @@ This module contains routines to scrape ZipRecruiter.
 """
 import math
 import time
-import re
-from datetime import datetime, date
+from datetime import datetime, timezone
 from typing import Optional, Tuple, Any
 
 from bs4 import BeautifulSoup
@@ -32,6 +31,7 @@ class ZipRecruiterScraper(Scraper):
 
         self.jobs_per_page = 20
         self.seen_urls = set()
+        self.delay = 5
 
     def find_jobs_in_page(
         self, scraper_input: ScraperInput, continue_token: str | None = None
@@ -44,12 +44,12 @@ class ZipRecruiterScraper(Scraper):
         """
         params = self.add_params(scraper_input)
         if continue_token:
-            params["continue"] = continue_token
+            params["continue_from"] = continue_token
         try:
             response = self.session.get(
                 f"https://api.ziprecruiter.com/jobs-app/jobs",
                 headers=self.headers(),
-                params=self.add_params(scraper_input),
+                params=params
             )
             if response.status_code != 200:
                 raise ZipRecruiterException(
@@ -60,7 +60,6 @@ class ZipRecruiterScraper(Scraper):
                 raise ZipRecruiterException("bad proxy")
             raise ZipRecruiterException(str(e))
 
-        time.sleep(5)
         response_data = response.json()
         jobs_list = response_data.get("jobs", [])
         next_continue_token = response_data.get("continue", None)
@@ -68,7 +67,7 @@ class ZipRecruiterScraper(Scraper):
         with ThreadPoolExecutor(max_workers=self.jobs_per_page) as executor:
             job_results = [executor.submit(self.process_job, job) for job in jobs_list]
 
-        job_list = [result.result() for result in job_results if result.result()]
+        job_list = list(filter(None, (result.result() for result in job_results)))
         return job_list, next_continue_token
 
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
@@ -86,6 +85,9 @@ class ZipRecruiterScraper(Scraper):
             if len(job_list) >= scraper_input.results_wanted:
                 break
 
+            if page > 1:
+                time.sleep(self.delay)
+
             jobs_on_page, continue_token = self.find_jobs_in_page(
                 scraper_input, continue_token
             )
@@ -95,22 +97,21 @@ class ZipRecruiterScraper(Scraper):
             if not continue_token:
                 break
 
-        if len(job_list) > scraper_input.results_wanted:
-            job_list = job_list[: scraper_input.results_wanted]
+        return JobResponse(jobs=job_list[: scraper_input.results_wanted])
 
-        return JobResponse(jobs=job_list)
-
-    @staticmethod
-    def process_job(job: dict) -> JobPost:
+    def process_job(self, job: dict) -> JobPost | None:
         """Processes an individual job dict from the response"""
         title = job.get("name")
-        job_url = job.get("job_url")
+        job_url = f"https://www.ziprecruiter.com/jobs//j?lvk={job['listing_key']}"
+        if job_url in self.seen_urls:
+            return
+        self.seen_urls.add(job_url)
 
         job_description_html = job.get("job_description", "").strip()
         description_soup = BeautifulSoup(job_description_html, "html.parser")
         description = modify_and_get_description(description_soup)
 
-        company = job["hiring_company"].get("name") if "hiring_company" in job else None
+        company = job.get("hiring_company", {}).get("name")
         country_value = "usa" if job.get("job_country") == "US" else "canada"
         country_enum = Country.from_string(country_value)
 
@@ -120,17 +121,7 @@ class ZipRecruiterScraper(Scraper):
         job_type = ZipRecruiterScraper.get_job_type_enum(
             job.get("employment_type", "").replace("_", "").lower()
         )
-
-        save_job_url = job.get("SaveJobURL", "")
-        posted_time_match = re.search(
-            r"posted_time=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", save_job_url
-        )
-        if posted_time_match:
-            date_time_str = posted_time_match.group(1)
-            date_posted_obj = datetime.strptime(date_time_str, "%Y-%m-%dT%H:%M:%SZ")
-            date_posted = date_posted_obj.date()
-        else:
-            date_posted = date.today()
+        date_posted = datetime.fromisoformat(job['posted_time'].rstrip("Z")).date()
 
         return JobPost(
             title=title,
@@ -173,7 +164,6 @@ class ZipRecruiterScraper(Scraper):
         params = {
             "search": scraper_input.search_term,
             "location": scraper_input.location,
-            "form": "jobs-landing",
         }
         job_type_value = None
         if scraper_input.job_type:
@@ -183,6 +173,8 @@ class ZipRecruiterScraper(Scraper):
                 job_type_value = "part_time"
             else:
                 job_type_value = scraper_input.job_type.value
+        if scraper_input.easy_apply:
+            params['zipapply'] = 1
 
         if job_type_value:
             params[
@@ -194,6 +186,8 @@ class ZipRecruiterScraper(Scraper):
 
         if scraper_input.distance:
             params["radius"] = scraper_input.distance
+
+        params = {k: v for k, v in params.items() if v is not None}
 
         return params
 
