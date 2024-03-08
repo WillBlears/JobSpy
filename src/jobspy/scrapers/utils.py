@@ -1,20 +1,22 @@
+import logging
 import re
-import numpy as np
 
-import tls_client
+import numpy as np
 import requests
+import tls_client
+from markdownify import markdownify as md
 from requests.adapters import HTTPAdapter, Retry
 
 from ..jobs import JobType
 
-
-def modify_and_get_description(soup):
-    for li in soup.find_all('li'):
-        li.string = "- " + li.get_text()
-
-    description = soup.get_text(separator='\n').strip()
-    description = re.sub(r'\n+', '\n', description)
-    return description
+logger = logging.getLogger("JobSpy")
+logger.propagate = False
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 
 def count_urgent_words(description: str) -> int:
@@ -31,6 +33,13 @@ def count_urgent_words(description: str) -> int:
     return count
 
 
+def markdown_converter(description_html: str):
+    if description_html is None:
+        return None
+    markdown = md(description_html)
+    return markdown.strip()
+
+
 def extract_emails_from_text(text: str) -> list[str] | None:
     if not text:
         return None
@@ -41,14 +50,10 @@ def extract_emails_from_text(text: str) -> list[str] | None:
 def create_session(proxy: dict | None = None, is_tls: bool = True, has_retry: bool = False, delay: int = 1) -> requests.Session:
     """
     Creates a requests session with optional tls, proxy, and retry settings.
-
     :return: A session object
     """
     if is_tls:
-        session = tls_client.Session(
-            client_identifier="chrome112",
-            random_tls_extension_order=True,
-        )
+        session = tls_client.Session(random_tls_extension_order=True)
         session.proxies = proxy
     else:
         session = requests.Session()
@@ -65,7 +70,6 @@ def create_session(proxy: dict | None = None, is_tls: bool = True, has_retry: bo
 
             session.mount('http://', adapter)
             session.mount('https://', adapter)
-
     return session
 
 
@@ -78,6 +82,7 @@ def get_enum_from_job_type(job_type_str: str) -> JobType | None:
         if job_type_str in job_type.value:
             res = job_type
     return res
+
 
 def currency_parser(cur_str):
     # Remove any non-numerical characters
@@ -94,3 +99,5 @@ def currency_parser(cur_str):
         num = float(cur_str)
 
     return np.round(num, 2)
+
+
