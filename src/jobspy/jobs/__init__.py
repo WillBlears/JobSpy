@@ -122,7 +122,7 @@ class Country(Enum):
     USA = ("usa,us,united states", "www", "com")
     URUGUAY = ("uruguay", "uy")
     VENEZUELA = ("venezuela", "ve")
-    VIETNAM = ("vietnam", "vn", "com")
+    VIETNAM = ("vietnam", "vn")
 
     # internal for ziprecruiter
     US_CANADA = ("usa/ca", "www")
@@ -145,7 +145,7 @@ class Country(Enum):
         else:
             raise Exception(f"Glassdoor is not available for {self.name}")
 
-    def get_glassdoor_url(self):
+    def get_url(self):
         return f"https://{self.glassdoor_domain_value}/"
 
     @classmethod
@@ -193,26 +193,14 @@ class CompensationInterval(Enum):
 
     @classmethod
     def get_interval(cls, pay_period):
-        interval_mapping = {
-            "YEAR": cls.YEARLY,
-            "HOUR": cls.HOURLY,
-        }
-        if pay_period in interval_mapping:
-            return interval_mapping[pay_period].value
-        else:
-            return cls[pay_period].value if pay_period in cls.__members__ else None
+        return cls[pay_period].value if pay_period in cls.__members__ else None
 
 
 class Compensation(BaseModel):
     interval: Optional[CompensationInterval] = None
-    min_amount: float | None = None
-    max_amount: float | None = None
+    min_amount: int | None = None
+    max_amount: int | None = None
     currency: Optional[str] = "USD"
-
-
-class DescriptionFormat(Enum):
-    MARKDOWN = "markdown"
-    HTML = "html"
 
 
 class JobPost(BaseModel):

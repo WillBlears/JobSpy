@@ -1,6 +1,7 @@
 import pandas as pd
 from typing import Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 from .jobs import JobType, Location
 from .scrapers.indeed import IndeedScraper
@@ -15,6 +16,17 @@ from .scrapers.exceptions import (
     GlassdoorException,
 )
 
+SCRAPER_MAPPING = {
+    Site.LINKEDIN: LinkedInScraper,
+    Site.INDEED: IndeedScraper,
+    Site.ZIP_RECRUITER: ZipRecruiterScraper,
+    Site.GLASSDOOR: GlassdoorScraper,
+}
+
+
+def _map_str_to_site(site_name: str) -> Site:
+    return Site[site_name.upper()]
+
 
 def scrape_jobs(
     site_name: str | list[str] | Site | list[Site] | None = None,
@@ -28,26 +40,14 @@ def scrape_jobs(
     country_indeed: str = "usa",
     hyperlinks: bool = False,
     proxy: str | None = None,
-    description_format: str = "markdown",
-    linkedin_fetch_description: bool | None = False,
+    full_description: bool | None = False,
     linkedin_company_ids: list[int] | None = None,
     offset: int | None = 0,
-    hours_old: int = None,
-    **kwargs,
 ) -> pd.DataFrame:
     """
     Simultaneously scrapes job data from multiple job sites.
     :return: results_wanted: pandas dataframe containing job data
     """
-    SCRAPER_MAPPING = {
-        Site.LINKEDIN: LinkedInScraper,
-        Site.INDEED: IndeedScraper,
-        Site.ZIP_RECRUITER: ZipRecruiterScraper,
-        Site.GLASSDOOR: GlassdoorScraper,
-    }
-
-    def map_str_to_site(site_name: str) -> Site:
-        return Site[site_name.upper()]
 
     def get_enum_from_value(value_str):
         for job_type in JobType:
@@ -60,15 +60,16 @@ def scrape_jobs(
     def get_site_type():
         site_types = list(Site)
         if isinstance(site_name, str):
-            site_types = [map_str_to_site(site_name)]
+            site_types = [_map_str_to_site(site_name)]
         elif isinstance(site_name, Site):
             site_types = [site_name]
         elif isinstance(site_name, list):
             site_types = [
-                map_str_to_site(site) if isinstance(site, str) else site
+                _map_str_to_site(site) if isinstance(site, str) else site
                 for site in site_name
             ]
         return site_types
+
     country_enum = Country.from_string(country_indeed)
 
     scraper_input = ScraperInput(
@@ -80,18 +81,31 @@ def scrape_jobs(
         is_remote=is_remote,
         job_type=job_type,
         easy_apply=easy_apply,
-        description_format=description_format,
-        linkedin_fetch_description=linkedin_fetch_description,
+        full_description=full_description,
         results_wanted=results_wanted,
         linkedin_company_ids=linkedin_company_ids,
         offset=offset,
-        hours_old=hours_old
     )
 
     def scrape_site(site: Site) -> Tuple[str, JobResponse]:
         scraper_class = SCRAPER_MAPPING[site]
         scraper = scraper_class(proxy=proxy)
-        scraped_data: JobResponse = scraper.scrape(scraper_input)
+
+        try:
+            scraped_data: JobResponse = scraper.scrape(scraper_input)
+        except (LinkedInException, IndeedException, ZipRecruiterException) as lie:
+            raise lie
+        except Exception as e:
+            if site == Site.LINKEDIN:
+                raise LinkedInException(str(e))
+            if site == Site.INDEED:
+                raise IndeedException(str(e))
+            if site == Site.ZIP_RECRUITER:
+                raise ZipRecruiterException(str(e))
+            if site == Site.GLASSDOOR:
+                raise GlassdoorException(str(e))
+            else:
+                raise e
         return site.value, scraped_data
 
     site_to_jobs_dict = {}
@@ -105,7 +119,7 @@ def scrape_jobs(
             executor.submit(worker, site): site for site in scraper_input.site_type
         }
 
-        for future in as_completed(future_to_site):
+        for future in concurrent.futures.as_completed(future_to_site):
             site_value, scraped_data = future.result()
             site_to_jobs_dict[site_value] = scraped_data
 
@@ -152,14 +166,8 @@ def scrape_jobs(
             jobs_dfs.append(job_df)
 
     if jobs_dfs:
-        # Step 1: Filter out all-NA columns from each DataFrame before concatenation
-        filtered_dfs = [df.dropna(axis=1, how='all') for df in jobs_dfs]
-        
-        # Step 2: Concatenate the filtered DataFrames
-        jobs_df = pd.concat(filtered_dfs, ignore_index=True)
-        
-        # Desired column order
-        desired_order = [
+        jobs_df = pd.concat(jobs_dfs, ignore_index=True)
+        desired_order: list[str] = [
             "job_url_hyper" if hyperlinks else "job_url",
             "site",
             "title",
@@ -178,16 +186,8 @@ def scrape_jobs(
             "emails",
             "description",
         ]
-        
-        # Step 3: Ensure all desired columns are present, adding missing ones as empty
-        for column in desired_order:
-            if column not in jobs_df.columns:
-                jobs_df[column] = None  # Add missing columns as empty
-        
-        # Reorder the DataFrame according to the desired order
-        jobs_df = jobs_df[desired_order]
-        
-        # Step 4: Sort the DataFrame as required
-        return jobs_df.sort_values(by=['site', 'date_posted'], ascending=[True, False])
+        jobs_formatted_df = jobs_df[desired_order]
     else:
-        return pd.DataFrame()
+        jobs_formatted_df = pd.DataFrame()
+
+    return jobs_formatted_df
